@@ -210,26 +210,6 @@ def anonymize_function_code(code: str, original_name: str, anonymized_name: str)
     return re.sub(pattern, anonymized_name, code)
 
 
-def determine_difficulty(function_name: str, bugs: List[Bug], code: str) -> str:
-    """Determine difficulty level based on function characteristics."""
-
-    # Check for interprocedural calls (calls to other functions)
-    func_call_pattern = re.compile(r'\b\w+\s*\(')
-    func_calls = func_call_pattern.findall(code)
-
-    # Count non-standard library calls (exclude malloc, free, etc.)
-    stdlib_funcs = {'malloc', 'free', 'calloc', 'realloc', 'assert', 'exit', 'printf', 'sizeof'}
-    custom_calls = [call for call in func_calls if call.split('(')[0].strip() not in stdlib_funcs]
-
-    # Check for conditionals
-    has_conditionals = 'if' in code or 'for' in code or 'while' in code
-
-    if custom_calls:
-        return "advanced"  # Requires interprocedural analysis
-    elif has_conditionals and bugs:
-        return "intermediate"  # Path-sensitive bugs
-    else:
-        return "basic"  # Simple bugs
 
 
 def categorize_function(bugs: List[Bug]) -> str:
@@ -253,9 +233,77 @@ def categorize_function(bugs: List[Bug]) -> str:
         return "other"
 
 
+def extract_struct_definitions(source_code: str) -> Dict[str, str]:
+    """
+    Extract all struct definitions from source code.
+
+    Returns: Dict mapping struct name to full struct definition code.
+    """
+    structs = {}
+    lines = source_code.split('\n')
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Match struct definition: struct name {
+        if line.startswith('struct ') and '{' in line:
+            # Extract struct name
+            match = re.match(r'struct\s+(\w+)\s*\{', line)
+            if match:
+                struct_name = match.group(1)
+
+                # Find closing brace
+                brace_count = line.count('{') - line.count('}')
+                struct_lines = [lines[i]]
+
+                j = i + 1
+                while j < len(lines) and brace_count > 0:
+                    struct_lines.append(lines[j])
+                    brace_count += lines[j].count('{') - lines[j].count('}')
+                    j += 1
+
+                structs[struct_name] = '\n'.join(struct_lines)
+                i = j
+                continue
+
+        i += 1
+
+    return structs
+
+
+def find_referenced_structs(code: str, all_structs: Dict[str, str]) -> List[str]:
+    """
+    Find all struct types referenced in the given code, including nested dependencies.
+
+    Returns: List of struct definition code for structs used in the function.
+    """
+    referenced = []
+    to_check = [code]
+    seen_structs = set()
+
+    while to_check:
+        current_code = to_check.pop(0)
+
+        for struct_name, struct_def in all_structs.items():
+            if struct_name in seen_structs:
+                continue
+
+            # Look for "struct struct_name" in the code
+            pattern = r'\bstruct\s+' + re.escape(struct_name) + r'\b'
+            if re.search(pattern, current_code):
+                referenced.append(struct_def)
+                seen_structs.add(struct_name)
+                # Check this struct definition for nested struct references
+                to_check.append(struct_def)
+
+    return referenced
+
+
 def extract_dependencies(code: str, all_functions: List[str]) -> List[str]:
     """
     Extract function dependencies (other functions called from this one).
+    Returns list of function names.
     """
     dependencies = []
 
@@ -266,6 +314,26 @@ def extract_dependencies(code: str, all_functions: List[str]) -> List[str]:
             dependencies.append(func_name)
 
     return dependencies
+
+
+def get_dependency_code(dep_names: List[str], all_functions: List[Tuple[str, int, int, str]]) -> List[str]:
+    """
+    Get the full code for dependency functions.
+
+    Args:
+        dep_names: List of function names that are dependencies
+        all_functions: List of (name, start_line, end_line, code) tuples
+
+    Returns: List of function code strings for dependencies
+    """
+    dep_code = []
+    func_dict = {name: code for name, _, _, code in all_functions}
+
+    for dep_name in dep_names:
+        if dep_name in func_dict:
+            dep_code.append(func_dict[dep_name])
+
+    return dep_code
 
 
 def generate_jsonl(test_file: str, issues_exp: str, output_path: str,
@@ -284,10 +352,15 @@ def generate_jsonl(test_file: str, issues_exp: str, output_path: str,
     # Parse ground truth
     bugs_by_function = parse_issues_exp(issues_exp)
 
-    # Extract includes
+    # Extract source code
     with open(test_file, 'r') as f:
         source_code = f.read()
+
+    # Extract includes
     includes = extract_includes(source_code)
+
+    # Extract struct definitions
+    all_structs = extract_struct_definitions(source_code)
 
     # Extract functions
     functions = extract_functions(test_file)
@@ -324,9 +397,27 @@ def generate_jsonl(test_file: str, issues_exp: str, output_path: str,
             anonymized_name = original_name
             anonymized_code = func_code
 
-        # Extract dependencies
-        deps = extract_dependencies(func_code, all_function_names)
-        deps = [d for d in deps if d != original_name]  # Remove self-references
+        # Extract dependencies (function names)
+        dep_names = extract_dependencies(func_code, all_function_names)
+        dep_names = [d for d in dep_names if d != original_name]  # Remove self-references
+
+        # Get full code for dependency functions
+        dep_code = get_dependency_code(dep_names, functions)
+
+        # Find referenced struct definitions
+        struct_defs = find_referenced_structs(func_code, all_structs)
+
+        # Also check dependencies for struct references
+        for dep in dep_code:
+            struct_defs.extend(find_referenced_structs(dep, all_structs))
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_structs = []
+        for struct_def in struct_defs:
+            if struct_def not in seen:
+                seen.add(struct_def)
+                unique_structs.append(struct_def)
 
         # Create ground truth
         ground_truth = {
@@ -344,16 +435,18 @@ def generate_jsonl(test_file: str, issues_exp: str, output_path: str,
         }
 
         # Determine metadata
-        difficulty = determine_difficulty(original_name, bugs, func_code)
         category = categorize_function(bugs)
 
         metadata = {
-            "difficulty": difficulty,
-            "requires_interprocedural": len(deps) > 0,
+            "requires_interprocedural": len(dep_names) > 0,
             "category": category,
             "start_line": start_line,
             "end_line": end_line
         }
+
+        # Combine includes with struct definitions
+        # Includes go at the top, then struct definitions
+        context_includes = includes + unique_structs
 
         # Create function info
         func_info = FunctionInfo(
@@ -362,8 +455,8 @@ def generate_jsonl(test_file: str, issues_exp: str, output_path: str,
             original_function_name=original_name,
             anonymized_function_name=anonymized_name,
             function_code=anonymized_code,
-            includes=includes,
-            dependencies=deps,
+            includes=context_includes,
+            dependencies=dep_code,
             ground_truth=ground_truth,
             metadata=metadata
         )

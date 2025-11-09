@@ -27,6 +27,16 @@ Safe Patterns:
 Task:
 Analyze the provided C function for bugs. Think through your analysis step-by-step, considering all execution paths and potential issues.
 
+You will be provided with:
+1. The main function to analyze
+2. Context (includes and struct definitions) - Use these to understand data structures
+3. Dependencies (called functions) - Use these to understand interprocedural behavior
+
+For interprocedural analysis:
+- Consider what dependency functions do to their parameters
+- Track initialization, modification, and usage across function boundaries
+- For struct fields, track which specific fields are initialized vs. accessed
+
 After your analysis, provide your final answer as JSON at the end of your response, enclosed in ```json and ```.
 
 Line Numbering:

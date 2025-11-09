@@ -66,7 +66,6 @@ def convert_to_hf_format(examples: List[Dict[str, Any]]) -> Dict[str, List]:
 
         # Metadata
         'category': [],
-        'difficulty': [],
         'requires_interprocedural': [],
         'start_line': [],
         'end_line': [],
@@ -102,7 +101,6 @@ def convert_to_hf_format(examples: List[Dict[str, Any]]) -> Dict[str, List]:
         # Metadata
         meta = ex['metadata']
         hf_data['category'].append(meta['category'])
-        hf_data['difficulty'].append(meta['difficulty'])
         hf_data['requires_interprocedural'].append(meta['requires_interprocedural'])
         hf_data['start_line'].append(meta['start_line'])
         hf_data['end_line'].append(meta['end_line'])
@@ -137,7 +135,6 @@ def create_dataset_splits(examples: List[Dict[str, Any]]) -> DatasetDict:
         'bug_traces': Sequence(Value('string')),
 
         'category': Value('string'),
-        'difficulty': Value('string'),
         'requires_interprocedural': Value('bool'),
         'start_line': Value('int32'),
         'end_line': Value('int32'),
@@ -161,7 +158,6 @@ def create_readme(examples: List[Dict[str, Any]]) -> str:
     safe = total - with_bugs
 
     categories = Counter(ex['metadata']['category'] for ex in examples)
-    difficulties = Counter(ex['metadata']['difficulty'] for ex in examples)
     source_files = len(set(ex['source_file'] for ex in examples))
 
     readme = f"""---
@@ -214,16 +210,6 @@ This dataset contains **{total} C functions** extracted from Meta's [Infer](http
     for cat, count in sorted(categories.items(), key=lambda x: -x[1]):
         readme += f"| {cat} | {count} | {count/total*100:.1f}% |\n"
 
-    readme += f"""
-### Difficulty Distribution
-
-| Difficulty | Count | Percentage |
-|------------|-------|------------|
-"""
-
-    for diff, count in sorted(difficulties.items(), key=lambda x: -x[1]):
-        readme += f"| {diff} | {count} | {count/total*100:.1f}% |\n"
-
     readme += """
 ## Dataset Structure
 
@@ -243,7 +229,6 @@ Each example contains:
 - **bug_severities**: Bug severity levels
 - **bug_traces**: Detailed trace information from Infer
 - **category**: Primary bug category or "safe"
-- **difficulty**: basic/intermediate/advanced
 - **requires_interprocedural**: Whether analysis requires understanding function calls
 - **start_line/end_line**: Location in original source file
 

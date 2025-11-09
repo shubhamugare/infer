@@ -51,14 +51,17 @@ print(ex['ground_truth'])
 
 ```json
 {
-  "id": "nullptr_001",
-  "source_file": "pulse/nullptr.c",
-  "anonymized_function_name": "test_function_001",
-  "function_code": "int* test_function_001() {...}",
-  "ground_truth": {"has_bug": true, "bugs": [...]},
+  "id": "abduce_005",
+  "source_file": "pulse/abduce.c",
+  "original_function_name": "set_ptr_param_array_get_null_bad",
+  "anonymized_function_name": "set_ptr_param_array_get_null",
+  "function_code": "void set_ptr_param_array_get_null() {...}",
+  "ground_truth": {"has_bug": true, "bugs": [{"bug_type": "NULLPTR_DEREFERENCE", ...}]},
   "metadata": {"category": "nullptr_dereference", ...}
 }
 ```
+
+**Note:** Function names are anonymized by removing hint suffixes (`_bad`, `_ok`, `_good`) and prefixes (`FP_`, `FN_`) while preserving the semantic/descriptive part of the name. This helps LLMs focus on code analysis rather than name-based hints.
 
 ## Filter Examples
 

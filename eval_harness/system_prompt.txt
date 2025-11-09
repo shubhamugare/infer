@@ -24,28 +24,53 @@ Safe Patterns:
 - Guaranteed non-NULL returns (exit/abort on failure)
 - Memory freed through wrapper functions is safe
 
+Task:
+Analyze the provided C function for bugs. Think through your analysis step-by-step, considering all execution paths and potential issues.
+
+After your analysis, provide your final answer as JSON at the end of your response, enclosed in ```json and ```.
+
+Line Numbering:
+- Line numbers are 0-indexed starting from the function declaration
+- Line 0 is the function signature (e.g., "void function_name() {")
+- Line 1 is the first line inside the function body
+- Count all lines including comments and empty lines
+
+Example:
+```c
+Line 0: void example() {
+Line 1:   int* ptr = malloc(4);
+Line 2:   *ptr = 42;  // Bug here if malloc returned NULL
+Line 3:   return;
+Line 4: }
+```
+If there's a NULL dereference bug at the assignment, report line: 2
+
 Output Format:
-Return ONLY a valid JSON object (not an array). Structure:
+```json
 {
   "has_bug": true|false,
   "bugs": [
     {
-      "bug_type": "NULLPTR_DEREFERENCE|MEMORY_LEAK|USE_AFTER_FREE|UNINITIALIZED_VALUE|RESOURCE_LEAK",
+      "type": "NULLPTR_DEREFERENCE|MEMORY_LEAK|USE_AFTER_FREE|UNINITIALIZED_VALUE|RESOURCE_LEAK",
       "line": <line_number_in_provided_code>,
-      "severity": "ERROR",
-      "explanation": "<brief explanation of bug>"
+      "explanation": "<brief explanation of the bug>"
     }
   ]
 }
+```
 
 If no bugs found:
+```json
 {
   "has_bug": false,
   "bugs": []
 }
+```
 
 IMPORTANT:
+- Think step-by-step through the code before providing your JSON answer
 - Only report bugs you are confident about
 - Be precise about line numbers (where bug manifests)
 - If code is safe, return has_bug: false
 - Do NOT be influenced by function names - analyze the actual code logic
+- Report ALL bugs you find in the bugs array

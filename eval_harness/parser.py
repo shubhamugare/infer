@@ -167,13 +167,37 @@ def extract_functions(source_path: str) -> List[Tuple[str, int, int, str]]:
 
 def anonymize_function_name(original_name: str, index: int) -> str:
     """
-    Anonymize function name to avoid hints.
+    Remove hint suffixes from function name while preserving semantic meaning.
+
+    Removes: _bad, _ok, _good, FP_, FN_, _latent
+    Keeps: Descriptive parts of the name
 
     Examples:
-        malloc_no_check_bad -> test_function_001
-        create_null_path_ok -> test_function_002
+        malloc_no_check_bad -> malloc_no_check
+        create_null_path_ok -> create_null_path
+        FP_some_function -> some_function
+        use_after_free_simple_bad -> use_after_free_simple
     """
-    return f"test_function_{index:03d}"
+    name = original_name
+
+    # Remove common hint prefixes
+    if name.startswith('FP_'):
+        name = name[3:]  # Remove "FP_"
+    elif name.startswith('FN_'):
+        name = name[3:]  # Remove "FN_"
+
+    # Remove common hint suffixes
+    hint_suffixes = ['_bad', '_ok', '_good', '_latent']
+    for suffix in hint_suffixes:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)]
+            break
+
+    # If name is empty after removal, use generic name
+    if not name:
+        name = f"test_function_{index:03d}"
+
+    return name
 
 
 def anonymize_function_code(code: str, original_name: str, anonymized_name: str) -> str:

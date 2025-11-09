@@ -3,14 +3,15 @@
 Evaluator script to run LLM on eval data and compute metrics.
 
 Usage:
-    python evaluator.py --data data/nullptr_basic.jsonl \
+    python evaluator.py --data data/pulse_all_examples.jsonl \
                         --model gpt-4 \
-                        --output results/gpt4/nullptr_basic_results.jsonl
+                        --output results/gpt4/pulse_results.jsonl
 """
 
 import argparse
 import json
 import os
+import re
 from typing import Dict, List, Any
 from dataclasses import dataclass
 
@@ -55,6 +56,38 @@ def load_system_prompt(path: str = "system_prompt.txt") -> str:
         return f.read()
 
 
+def extract_json_from_response(response: str) -> Dict[str, Any]:
+    """
+    Extract JSON from LLM response.
+    Handles responses with thinking + JSON in markdown code blocks.
+
+    Expected format:
+    Some thinking...
+    ```json
+    {"has_bug": true, ...}
+    ```
+    """
+    # Try to find JSON in markdown code block
+    json_pattern = r'```json\s*\n(.*?)\n```'
+    match = re.search(json_pattern, response, re.DOTALL)
+
+    if match:
+        json_str = match.group(1)
+        return json.loads(json_str)
+
+    # Fallback: try to parse the whole response as JSON
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        # Last resort: find first { ... } block
+        brace_pattern = r'\{[^}]*"has_bug"[^}]*\}'
+        match = re.search(brace_pattern, response, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+
+        raise ValueError(f"Could not extract JSON from response: {response[:200]}...")
+
+
 def construct_prompt(example: Dict[str, Any], include_context: bool = True) -> str:
     """
     Construct prompt for LLM evaluation.
@@ -70,16 +103,12 @@ def construct_prompt(example: Dict[str, Any], include_context: bool = True) -> s
         prompt += '\n'.join(example['includes']) + '\n\n'
 
     # Add function code
-    prompt += f"```c\n{example['function_code']}```\n\n"
-
-    # Add task
-    prompt += "Return a JSON object with your analysis. Format:\n"
-    prompt += '{"has_bug": true|false, "bugs": [{"bug_type": "...", "line": N, "severity": "ERROR", "explanation": "..."}]}\n'
+    prompt += f"```c\n{example['function_code']}```\n"
 
     return prompt
 
 
-def call_llm(system_prompt: str, user_prompt: str, model: str = "gpt-4") -> Dict[str, Any]:
+def call_llm(system_prompt: str, user_prompt: str, model: str = "gpt-4") -> str:
     """
     Call LLM API. This is a placeholder - implement with your LLM API.
 
@@ -89,7 +118,7 @@ def call_llm(system_prompt: str, user_prompt: str, model: str = "gpt-4") -> Dict
         model: Model name
 
     Returns:
-        Parsed JSON response from LLM
+        Raw text response from LLM
     """
     # TODO: Implement actual LLM API call
     # Example with OpenAI:
@@ -102,7 +131,7 @@ def call_llm(system_prompt: str, user_prompt: str, model: str = "gpt-4") -> Dict
     #     ],
     #     temperature=0.0
     # )
-    # return json.loads(response.choices[0].message.content)
+    # return response.choices[0].message.content
 
     raise NotImplementedError("Implement LLM API call for your provider")
 
@@ -110,6 +139,10 @@ def call_llm(system_prompt: str, user_prompt: str, model: str = "gpt-4") -> Dict
 def evaluate_prediction(prediction: Dict[str, Any], ground_truth: Dict[str, Any]) -> Dict[str, Any]:
     """
     Evaluate a single prediction against ground truth.
+
+    Format:
+    prediction = {"has_bug": bool, "bugs": [{"type": str, "line": int, "explanation": str}]}
+    ground_truth = {"has_bug": bool, "bugs": [{"bug_type": str, ...}]}
 
     Returns:
         Dict with evaluation results including match type
@@ -121,9 +154,9 @@ def evaluate_prediction(prediction: Dict[str, Any], ground_truth: Dict[str, Any]
         'predicted_has_bug': pred_has_bug,
         'actual_has_bug': gt_has_bug,
         'match_type': None,
-        'matched_bugs': [],
+        'matched_bug_types': [],
         'missed_bugs': [],
-        'false_alarms': []
+        'wrong_bug_types': []
     }
 
     # Case 1: Both agree no bug
@@ -134,35 +167,33 @@ def evaluate_prediction(prediction: Dict[str, Any], ground_truth: Dict[str, Any]
     # Case 2: Predicted no bug but there is one
     if not pred_has_bug and gt_has_bug:
         result['match_type'] = 'false_negative'
-        result['missed_bugs'] = ground_truth['bugs']
+        result['missed_bugs'] = [bug['bug_type'] for bug in ground_truth['bugs']]
         return result
 
     # Case 3: Predicted bug but there isn't one
     if pred_has_bug and not gt_has_bug:
         result['match_type'] = 'false_positive'
-        result['false_alarms'] = prediction.get('bugs', [])
+        pred_bugs = prediction.get('bugs', [])
+        result['wrong_bug_types'] = [bug.get('type') for bug in pred_bugs if bug.get('type')]
         return result
 
-    # Case 4: Both agree there's a bug - check if types match
+    # Case 4: Both agree there's a bug - check if any types match
     pred_bugs = prediction.get('bugs', [])
-    gt_bugs = ground_truth['bugs']
+    pred_types = {bug.get('type') for bug in pred_bugs if bug.get('type')}
+    gt_bug_types = {bug['bug_type'] for bug in ground_truth['bugs']}
 
-    # Match bugs by type (simple matching)
-    pred_types = {bug['bug_type'] for bug in pred_bugs}
-    gt_types = {bug['bug_type'] for bug in gt_bugs}
+    # Find matches
+    matched_types = pred_types & gt_bug_types
 
-    matched = pred_types & gt_types
-    missed = gt_types - pred_types
-    false_alarms = pred_types - gt_types
-
-    if matched:
+    if matched_types:
         result['match_type'] = 'true_positive'
-        result['matched_bugs'] = list(matched)
+        result['matched_bug_types'] = list(matched_types)
+        result['missed_bugs'] = list(gt_bug_types - matched_types)
+        result['wrong_bug_types'] = list(pred_types - matched_types)
     else:
-        result['match_type'] = 'false_positive'  # Wrong bug type
-
-    result['missed_bugs'] = [bug for bug in gt_bugs if bug['bug_type'] in missed]
-    result['false_alarms'] = [bug for bug in pred_bugs if bug['bug_type'] in false_alarms]
+        result['match_type'] = 'false_positive'  # Wrong bug types
+        result['wrong_bug_types'] = list(pred_types)
+        result['missed_bugs'] = list(gt_bug_types)
 
     return result
 
@@ -201,8 +232,11 @@ def evaluate_dataset(data_path: str, model: str, output_path: str):
         user_prompt = construct_prompt(example)
 
         try:
-            # Call LLM (you need to implement this)
-            prediction = call_llm(system_prompt, user_prompt, model)
+            # Call LLM
+            raw_response = call_llm(system_prompt, user_prompt, model)
+
+            # Extract JSON from response (handles thinking + JSON format)
+            prediction = extract_json_from_response(raw_response)
 
             # Evaluate
             eval_result = evaluate_prediction(prediction, example['ground_truth'])
@@ -221,7 +255,9 @@ def evaluate_dataset(data_path: str, model: str, output_path: str):
             # Store result
             result = {
                 'example_id': example['id'],
+                'source_file': example['source_file'],
                 'original_function_name': example['original_function_name'],
+                'raw_response': raw_response,
                 'prediction': prediction,
                 'ground_truth': example['ground_truth'],
                 'evaluation': eval_result,
@@ -231,17 +267,18 @@ def evaluate_dataset(data_path: str, model: str, output_path: str):
 
             # Print summary
             print(f"  Result: {match_type}")
-            if eval_result['matched_bugs']:
-                print(f"  Matched bugs: {eval_result['matched_bugs']}")
-            if eval_result['missed_bugs']:
-                print(f"  Missed bugs: {[b['bug_type'] for b in eval_result['missed_bugs']]}")
-            if eval_result['false_alarms']:
-                print(f"  False alarms: {[b['bug_type'] for b in eval_result['false_alarms']]}")
+            if eval_result.get('matched_bug_types'):
+                print(f"  Matched: {eval_result['matched_bug_types']}")
+            if eval_result.get('missed_bugs'):
+                print(f"  Missed: {eval_result['missed_bugs']}")
+            if eval_result.get('wrong_bug_types'):
+                print(f"  Wrong types: {eval_result['wrong_bug_types']}")
 
         except Exception as e:
             print(f"  Error: {e}")
             result = {
                 'example_id': example['id'],
+                'source_file': example['source_file'],
                 'error': str(e)
             }
             results.append(result)
